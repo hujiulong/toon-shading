@@ -1,0 +1,295 @@
+<!-- hujiulong -->
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <title>teapot - hujiulong</title>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    </head>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            border: 0;
+        }
+        
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        #container {
+            width: 100%;
+            height: 100%;
+        }
+
+    </style>
+    <body>
+        <div id="container">
+        </div>
+        <script src="./js/three.min.js"></script>
+        <script src="./js/OrbitControls.js"></script>
+        <script src='./js/TeapotBufferGeometry.js'></script>
+
+        <script id="vertexShader" type="shader/vertex">
+            precision highp float;
+            varying vec2 vUv;
+            varying vec3 vLightFront;
+            
+            // 注入three.js中预定义的glsl片段
+            #include <common>
+            #include <lights_pars>
+
+            void main() {
+
+                #include <beginnormal_vertex>
+                #include <defaultnormal_vertex>
+                #include <begin_vertex>
+                #include <project_vertex>
+
+                // 在lights_lambert_vertex这段代码中计算了vLightFront
+                // https://github.com/mrdoob/three.js/blob/dev/src/renderers/shaders/ShaderChunk/lights_lambert_vertex.glsl
+                #include <lights_lambert_vertex>
+
+                vUv = uv;
+
+                gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+
+            }
+
+        </script>
+
+        <script id="outlineFragmentShader" type="shader/fragment">
+
+            // outline的效果参考了这篇博客 http://blog.csdn.net/u011712406/article/details/50085281
+
+            uniform sampler2D depthTexture;
+            uniform sampler2D normalTexture;
+            uniform sampler2D sceneTexture;
+            varying vec2 vUv;
+
+            float planeDistance( const in vec3 positionA, const in vec3 normalA, const in vec3 positionB, const in vec3 normalB ) {
+                vec3 positionDelta = positionB-positionA;
+                float planeDistanceDelta = max( abs( dot( positionDelta, normalA ) ), abs( dot( positionDelta, normalB ) ) );
+                    return planeDistanceDelta;
+            }
+
+            void main() {
+
+                float depthCenter = texture2D( depthTexture, vUv ).r;
+                float px = 1.0 / 2000.0;    // 相邻取样点间隔
+
+                vec3 leftpos = vec3( vUv.s - px, vUv.t, 1.0 - texture2D( depthTexture, vec2( vUv.s - px, vUv.t ) ).r );
+                vec3 rightpos = vec3( vUv.s + px, vUv.t, 1.0 - texture2D( depthTexture, vec2( vUv.s + px, vUv.t ) ).r );
+                vec3 uppos = vec3( vUv.s, vUv.t - px, 1.0 - texture2D( depthTexture, vec2( vUv.s, vUv.t - px ) ).r );
+                vec3 downpos = vec3( vUv.s, vUv.t + px, 1.0 - texture2D( depthTexture, vec2( vUv.s, vUv.t + px ) ).r );
+
+                vec3 leftnor = texture2D( normalTexture, vec2( vUv.s - px, vUv.t ) ).xyz;
+                vec3 rightnor = texture2D( normalTexture, vec2( vUv.s + px, vUv.t ) ).xyz;
+                vec3 upnor = texture2D( normalTexture, vec2( vUv.s, vUv.t - px ) ).xyz;
+                vec3 downnor = texture2D( normalTexture, vec2( vUv.s, vUv.t + px ) ).xyz;
+
+                vec2 planeDist = vec2( planeDistance( leftpos, leftnor, rightpos, rightnor ), planeDistance( uppos, upnor, downpos, downnor ) );
+
+                float planeEdge = 2.5 * length( planeDist );
+                planeEdge = 1.0 - 0.5 * smoothstep( 0.0, depthCenter, planeEdge );
+
+                float normEdge = max( length( leftnor - rightnor ), length( upnor - downnor ) );
+                normEdge = 1.0 - 0.5 * smoothstep( 0.0, 0.4, normEdge ); 
+
+                float edge= planeEdge * normEdge;
+
+                vec4 raw = texture2D( sceneTexture, vUv );
+                gl_FragColor = vec4( vec3( raw * edge ), 1.0 );
+
+            }
+        </script>
+
+        <script id="cartoonFragmentShader" type="shader/fragment">
+
+            varying vec3 vLightFront;
+
+            void main() {
+
+                // green 0xabff33
+                vec3 greenColor = vec3 ( 0.67, 1.0, 0.1 );
+
+                // 亮度
+                float intensity = vLightFront[ 0 ];
+
+                // 根据亮度做不同的处理
+                if ( intensity < 0.30 ) {
+
+                    gl_FragColor = vec4( mix( greenColor, vec3( 0.0 ), 0.5 ), 1.0 ); 
+
+                }
+
+                if ( intensity >= 0.30 ) {
+
+                    gl_FragColor = vec4( mix( greenColor, vec3( 0.0 ), 0.3 ), 1.0 );
+
+                }
+
+                if ( intensity >= 0.65 ) { 
+
+                    gl_FragColor = vec4( mix( greenColor, vec3( 0.5 ), 0.1 ), 1.0 ); 
+
+                }
+
+                if ( intensity >= 0.95 ) { 
+
+                    gl_FragColor = vec4( mix( greenColor, vec3( 1.0 ), 0.3 ), 1.0 );
+
+                }
+
+            }
+        </script>
+
+        <script>
+
+            // hujiulong / me@hujiulong.com
+
+            var controls, renderer;
+
+            var scene, camera;
+
+            var objectScene, objectCamera;
+
+            var depthMaterial, normalMaterial;
+            var depthTexture, normalTexture, sceneTexture;
+
+            init();
+            render();
+
+            function init() {
+
+                // scene
+                scene = new THREE.Scene();          // 这个场景是用来放置最后贴渲染结果的平面的
+                objectScene = new THREE.Scene();    // 茶壶和灯光是放在这个场景中
+
+                // camera
+                objectCamera = new THREE.PerspectiveCamera( 60, window.innerWidth / window.innerHeight, 1, 1000 );
+                objectCamera.position.set( 0, 200, 200 );
+
+                camera = new THREE.OrthographicCamera( - 1, 1, 1, - 1, 0, 1 );
+
+                // renderer
+                renderer = new THREE.WebGLRenderer( { antialias: true } );
+                renderer.setClearColor( 0xeeeeee );
+                renderer.setPixelRatio( window.devicePixelRatio );
+                renderer.setSize( window.innerWidth, window.innerHeight );
+
+                var container = document.getElementById( 'container' );
+                container.appendChild( renderer.domElement );
+
+                // controls
+                controls = new THREE.OrbitControls( objectCamera, renderer.domElement );
+                controls.enableZoom = false;
+
+                controls.addEventListener( 'change', function() {
+
+                    // 有操作时再渲染，减少渲染次数
+                    render();
+
+                }, false );
+
+                // light
+                light = new THREE.DirectionalLight( 0xffffff, 0.7 );
+                light.position.set( -1, 0.4, 0.5 );
+                objectScene.add( light );
+
+                light = new THREE.AmbientLight( 0x222222 );
+                objectScene.add( light );
+
+                // material
+                depthMaterial = new THREE.MeshDepthMaterial();
+                normalMaterial = new THREE.MeshNormalMaterial();
+                outlineMaterial = new THREE.ShaderMaterial( {
+                    uniforms: {
+                        depthTexture: {
+                            value: null
+                        },
+                        normalTexture: {
+                            value: null
+                        },
+                        sceneTexture: {
+                            value: null
+                        }
+                    },
+                    vertexShader: document.getElementById( 'vertexShader' ).textContent,
+                    fragmentShader: document.getElementById( 'outlineFragmentShader' ).textContent
+                } );
+
+                // 用于保存深度信息渲染的结果
+                depthTexture = new THREE.WebGLRenderTarget( window.innerWidth,  window.innerHeight );
+
+                // 用于保存法线信息渲染的结果
+                normalTexture = new THREE.WebGLRenderTarget( window.innerWidth,  window.innerHeight );
+
+                // 用于保存没有outline效果之前的渲染结果
+                sceneTexture = new THREE.WebGLRenderTarget( window.innerWidth,  window.innerHeight );
+
+                outlineMaterial.uniforms.depthTexture.value = depthTexture.texture;
+                outlineMaterial.uniforms.normalTexture.value = normalTexture.texture;
+                outlineMaterial.uniforms.sceneTexture.value = sceneTexture.texture;
+
+
+                // teapot geometry
+                var teapotGeometry = new THREE.TeapotBufferGeometry();
+
+                // 卡通材质
+                var cartoonMaterial = new THREE.ShaderMaterial( {
+                    lights: true,           // 使用场景的的光源
+                    uniforms: Object.assign( 
+                        THREE.UniformsLib[ "common" ], 
+                        THREE.UniformsLib[ "lights" ] ),
+                    vertexShader: document.getElementById( 'vertexShader' ).textContent,
+                    fragmentShader: document.getElementById( 'cartoonFragmentShader' ).textContent
+                } );
+
+                // 卡通效果
+                var mesh = new THREE.Mesh( teapotGeometry, cartoonMaterial );
+                objectScene.add( mesh );
+
+                var screenPlane = new THREE.PlaneBufferGeometry( 2, 2 );
+                scene.add( new THREE.Mesh( screenPlane, outlineMaterial ) );
+
+                window.addEventListener( 'resize', onWindowResize, false );
+
+            }
+
+            function onWindowResize() {
+
+                objectCamera.aspect = window.innerWidth / window.innerHeight;
+                objectCamera.updateProjectionMatrix();
+
+                renderer.setSize( window.innerWidth, window.innerHeight );
+                render();
+
+            }
+
+            function render() {
+
+                objectScene.overrideMaterial = normalMaterial;
+                renderer.render( objectScene, objectCamera, normalTexture );
+
+                objectScene.overrideMaterial = depthMaterial;
+                renderer.render( objectScene, objectCamera, depthTexture );
+
+                objectScene.overrideMaterial = null;
+                renderer.render( objectScene, objectCamera, sceneTexture );
+
+                outlineMaterial.uniforms.depthTexture.needsUpdate = true;
+                outlineMaterial.uniforms.normalTexture.needsUpdate = true;
+                outlineMaterial.uniforms.sceneTexture.needsUpdate = true;
+
+                renderer.render( scene, camera );
+
+            }
+
+
+        </script>
+
+    </body>
+</html>
